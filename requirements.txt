@@ -1,0 +1,75 @@
+# requirements.txt — qwrt2an758x 移植脚本的运行环境要求
+#
+# 注意：脚本本身只用 Python 3 标准库（tarfile / struct / subprocess / urllib /
+# json / hashlib / gzip / lzma / zlib），**不需要 pip 安装任何东西**，
+# `pip install -r requirements.txt` 在这里是空操作。
+#
+# 真正的前置条件是 4 个宿主命令行工具。它们是「系统包」，各发行版包名不同，
+# 请按下面的表装对应发行版的那一行即可。
+#
+# ┌──────────────┬───────────────────────────────────────────────────────────┐
+# │ 必需性        │ 工具 & 作用                                              │
+# ├──────────────┼───────────────────────────────────────────────────────────┤
+# │ 必需          │ python3        运行脚本（≥ 3.8，用到 f-string / shutil）  │
+# │ 必需          │ dtc            设备树反编译/回编（改写 root=/dev/... 那步）│
+# │ 必需          │ mkimage        打包外层 FIT .itb（U-Boot tools）          │
+# │ 必需          │ dumpimage      拆内层 kernel FIT + 校验（U-Boot tools）   │
+# │ 可选          │ fwtool         给 .itb 追加 OpenWrt sysupgrade metadata    │
+# │              │                Web U-Boot 刷 fit/rootfs 卷【不校验】它，   │
+# │              │                没有也能出可刷产物；只有启动后跑 `sysupgrade`│
+# │              │                就地升级才需要。缺失时脚本会自动跳过第 8 步。 │
+# │ 必需(通常自带) │ gzip           重压缩内核；优先用系统 gzip -n -9，没有会   │
+# │              │                回退到 Python 内置 gzip（产物仍可用，仅字节  │
+# │              │                级可复现性差一点）。                         │
+# └──────────────┴───────────────────────────────────────────────────────────┘
+#
+# ────────────────────────────────────────────────────────────────────────────
+# 各发行版一键安装（需要 root/sudo）
+# ────────────────────────────────────────────────────────────────────────────
+#
+# Arch Linux（本项目验证环境）：
+#     sudo pacman -S --needed python dtc uboot-tools gzip
+#     #  - uboot-tools（Extra）提供 mkimage + dumpimage
+#     #  - dtc 提供 /usr/bin/dtc
+#     #  - fwtool 官方仓库/extra 均无，属可选；要装请看本文件末尾「源码构建 fwtool」
+#
+# Debian 12/13（bookworm/trixie）:
+#     sudo apt update && sudo apt install -y python3 device-tree-compiler u-boot-tools gzip
+#     #  - device-tree-compiler 提供 /usr/bin/dtc
+#     #  - u-boot-tools 提供 mkimage + dumpimage
+#     #  - fwtool 在 Debian 主仓库没有（不是遗漏，它本就只在 OpenWrt 侧）
+#
+# Ubuntu 22.04 / 24.04（jammy/noble）: 与 Debian 同名同命令
+#     sudo apt update && sudo apt install -y python3 device-tree-compiler u-boot-tools gzip
+#
+# Fedora 39+/RHEL 系:
+#     sudo dnf install -y python3 dtc uboot-tools gzip
+#     #  - uboot-tools 提供 mkimage + dumpimage
+#     #  - dtc 包名就是 dtc
+#     #  - fwtool 同样不在 Fedora 仓库
+#
+# ────────────────────────────────────────────────────────────────────────────
+# mkimage/dumpimage 在 PATH 里找不到时的处理
+# ────────────────────────────────────────────────────────────────────────────
+# 脚本会自动找以下位置（任放其一即可，无需装系统包）：
+#     tools/qwrt2an758x/u-boot-tools/   tools/qwrt2an758x/tools/
+#     ../../work/u-boot-2026.07/tools/  ../../work/
+# 也可以显式指定目录（目录里要同时有 mkimage 和 dumpimage）：
+#     python3 qwrt2an758x.py <bin> --ubid 6 --tools /path/to/uboot-tools-bin
+# 若你从别的 U-Boot 源码树编过 tools（tools/mkimage、tools/dumpimage），
+# 直接把那个目录 --tools 传进来即可。
+#
+# ────────────────────────────────────────────────────────────────────────────
+# 源码构建 fwtool（仅在需要就地升级 metadata 时才做）
+# ────────────────────────────────────────────────────────────────────────────
+#     git clone https://git.openwrt.org/project/fwtool.git
+#     cd fwtool && cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build
+#     # 得到 ./build/fwtool，用 --fwtool 指向它：
+#     python3 qwrt2an758x.py <bin> --ubid 6 --fwtool ./fwtool/build/fwtool
+#     # 或把它放进 PATH，或放到仓库的 work/up/fwtool（脚本会自动扫描）。
+#
+# ────────────────────────────────────────────────────────────────────────────
+# 自检：全部就绪应输出可解析的版本号，无 "command not found"
+# ────────────────────────────────────────────────────────────────────────────
+#     python3 --version && dtc --version && mkimage -V && dumpimage -V
+#     # gzip --version ；fwtool 可选： command -v fwtool || echo "无 fwtool，跳过 metadata"

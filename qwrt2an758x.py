@@ -52,7 +52,7 @@ HERE = Path(__file__).resolve().parent
 ARM64_MAGIC = b"ARMd\x00\x00\x00\x00"              # arm64 Image magic 在偏移 0x38
 SQUASHFS_MAGIC = b"hsqs"
 DTB_MAGIC = b"\xd0\x0d\xfe\xed"
-DEFAULT_BOOT_IPS = ["192.168.1.1", "192.168.0.1"]   # 本项目 U-Boot / pbs05 uboot-an758x 默认
+DEFAULT_BOOT_IPS = ["192.168.1.1", "192.168.0.1"]   # ImmortalWrt-Airoha 网页 U-Boot / pbs05 uboot-an758x
 LEB = 126976                                         # 本板 live GET /info -> ubi.leb
 TARGET_BOARD = "nokia_xg-040g-md"
 
@@ -110,16 +110,23 @@ def find_tools(cli_tools, cli_fwtool):
 
     mk = find_bin("mkimage")
     di = find_bin("dumpimage")
-    fw = Path(cli_fwtool).expanduser() if cli_fwtool else find_bin(
-        "fwtool", extra=[HERE / "up", HERE.parent.parent / "work" / "up"])
     dtc = which("dtc")
-    missing = [n for n, v in (("mkimage", mk), ("dumpimage", di), ("fwtool", fw), ("dtc", dtc))
+    # fwtool 是可选的：Web U-Boot 刷 fit/rootfs 卷并不校验 sysupgrade metadata，
+    # 只有系统启动后跑 `sysupgrade` 就地升级才会读它。没有 fwtool 也能出可刷产物。
+    if cli_fwtool:
+        fw = Path(cli_fwtool).expanduser()
+        if not (fw.is_file() and os.access(fw, os.X_OK)):
+            raise Fatal(f"--fwtool 指定的文件不可执行: {fw}")
+    else:
+        fw = find_bin("fwtool", extra=[HERE / "up", HERE.parent.parent / "work" / "up"])
+    missing = [n for n, v in (("mkimage", mk), ("dumpimage", di), ("dtc", dtc))
                if not v]
     if missing:
         raise Fatal(
             "找不到可执行: " + ", ".join(missing) + "\n"
-            "  mkimage/dumpimage 来自 U-Boot tools（--tools DIR），fwtool 来自 OpenWrt（--fwtool），\n"
-            "  dtc 用系统包（Arch: sudo pacman -S dtc）。")
+            "  mkimage/dumpimage 来自 U-Boot tools（--tools DIR 或系统包 uboot-tools/u-boot-tools），\n"
+            "  dtc 用系统包（Arch: sudo pacman -S dtc；Debian: apt install device-tree-compiler）。\n"
+            "  详见同目录 requirements.txt。")
     return mk, di, fw, Path(dtc)
 
 
@@ -424,7 +431,7 @@ def main(argv=None):
 
     try:
         mk, di, fw, dtc = find_tools(args.tools, args.fwtool)
-        print(f"工具 : {mk} | {di} | {fw} | {dtc}")
+        print(f"工具 : {mk} | {di} | {fw if fw else 'fwtool(缺失→跳过 metadata)'} | {dtc}")
 
         print("### 1. 解包 sysupgrade .bin (ustar tar)")
         board, parts = unpack_sysupgrade(src_bin, build)
@@ -515,8 +522,11 @@ def main(argv=None):
         dist = args.dist or dist
         ver = args.ver or ver
         meta = default_metadata(board or TARGET_BOARD, dist, ver)
-        append_metadata(fw, itb, meta)
-        print(f"    metadata: dist={dist} version={ver} board={meta['version']['board']} (读回 ✓)")
+        if fw:
+            append_metadata(fw, itb, meta)
+            print(f"    metadata: dist={dist} version={ver} board={meta['version']['board']} (读回 ✓)")
+        else:
+            print("    跳过（未找到 fwtool）。产物照常可刷；仅启动后跑 `sysupgrade` 就地升级才需要这段 metadata。")
 
         print("### 9. 校验")
         verify(di, itb, b2_dtb, gz, build)

@@ -1,10 +1,32 @@
 # qwrt2an758x — 原版 QWRT `.bin` → xg-040g-md Web-U-Boot 可刷的 B2 `.itb` 一键移植脚本
 
 把 QWRT 官方编译出来的 `…-nokia_xg-040g-md-squashfs-sysupgrade.bin`，一条命令重新打包成
-能直接从 **Airoha Web U-Boot 恢复页**（本项目 / pbs05 `uboot-an758x`）刷入的 **B2 格式** FIT `.itb`。
+能直接从 **ImmortalWrt-Airoha 网页 U-Boot 恢复页**刷入的 **B2 格式** FIT `.itb`。
+这套 Web U-Boot 是 [Loong1996/ImmortalWrt-Airoha](https://github.com/Loong1996/ImmortalWrt-Airoha)
+作者自研的（板上自报 `Airoha Web U-Boot 1.1.0 by Loong`，恢复页「关于」也指向该项目）。
 
 > 只支持 **nokia xg-040g-md**（分区表、别名路径、nvmem phandle 都是这块板写死的）。
-> 详细原理与「和原版有何区别」见仓库根目录 [`QWRT-B2-说明.md`](../../QWRT-B2-说明.md)。
+> 仓库名里的 `an758x` 只是项目名。**刷入目标不是 pbs05/uboot-an758x** —— 那是同 SoC
+> 家族的另一套 U-Boot，本项目只与它在 ECC4 布局、卷名、bootcmd 写法上互相参考
+> （对比见 [`QWRT-B2-说明.md`](QWRT-B2-说明.md) §8）。
+> 详细原理与「和原版有何区别」见同目录 [`QWRT-B2-说明.md`](QWRT-B2-说明.md)；
+> 环境准备见同目录 [`requirements.txt`](requirements.txt)。
+
+---
+
+## 刷入目标（别搞混）
+
+产物是刷 **ImmortalWrt-Airoha 作者 Loong 自研的 Airoha Web U-Boot**（[Loong1996/ImmortalWrt-Airoha](https://github.com/Loong1996/ImmortalWrt-Airoha)）。
+板子上能直接验证这一点：bootmenu 第 9 项「关于」= `github.com/Loong1996/ImmortalWrt-Airoha`，
+`web_uboot_show_about` 打印 `Airoha Web U-Boot 1.1.0 by Loong`；恢复页 IP 默认 `192.168.1.1`。
+
+仓库名里的 `an758x` **不是** [pbs05/uboot-an758x](https://github.com/pbs05/uboot-an758x)（同 SoC 家族的另一套
+U-Boot，恢复页 IP 是 `192.168.0.1`）。本项目只与它在 ECC4 布局、卷名、bootcmd 写法上互相参考：
+ImmortalWrt-Airoha 主动把 BL2/U-Boot/Linux 从 ECC8 改成了与 pbs05 一致的 ECC4（见其 `README.md:13`）。
+逐条对照见 [`QWRT-B2-说明.md`](QWRT-B2-说明.md) §8。因为 B2 的 FIT 里 `config-1` 是 default configuration，两套 U-Boot 的
+`bootm $loadaddr#$bootconf` 与裸 `bootm $loadaddr` 在**结构上**都能选中同一份配置。
+（注意：**实机验证只做了 Loong 这一套** —— 「启动成功了」那台跑的是 Airoha Web U-Boot 1.1.0；
+pbs05 那一侧是按 env 对照推导，没有上板试过。）
 
 ---
 
@@ -23,17 +45,83 @@ B2 的做法：
 
 ---
 
-## 依赖
+## 准备环境
 
-| 需要 | 从哪来 | 备注 |
-|------|--------|------|
-| Python 3 | 系统 | 只用标准库，不需要 pip 包 |
-| `dtc` | Arch: `sudo pacman -S dtc` | 反编译 / 回编设备树 |
-| `mkimage` / `dumpimage` | U-Boot tools（脚本自动找 `../../work/u-boot-2026.07/tools`），或 `--tools DIR` | 解内层 FIT、打包外层 FIT |
-| `fwtool` | OpenWrt（自动找 `../../work/up/fwtool`），或 `--fwtool PATH` | 追加 sysupgrade metadata |
-| `gzip` | 系统 | 优先用 `gzip -n -9` 保证与已验证产物逐字节一致；没有则用 Python `gzip` 回退 |
+脚本自身 **只用 Python 3 标准库，不需要 `pip install` 任何东西**；真正的前置条件是
+4 个宿主命令行工具。完整清单与各发行版安装命令见
+[`requirements.txt`](requirements.txt)（该文件全是注释，`pip install -r` 是空操作，
+当说明书看即可）。
 
-> 脚本 **不依赖网络，也不需要 curl**：自动探测 UBID 用的是内置 `urllib`。
+### 需要的工具
+
+| 需要 | 作用 | 说明 |
+|------|------|------|
+| `python3` | 运行脚本 | ≥ 3.8 |
+| `dtc` | 反编译 / 回编设备树 | 改写 `root=/dev/ubiblock0_<UBID>` 那一步 |
+| `mkimage` | 打包外层 FIT `.itb` | U-Boot tools |
+| `dumpimage` | 拆内层 kernel FIT + 校验 | U-Boot tools，与 `bootm` 同一套 lib |
+| `fwtool` | **可选**：追加 sysupgrade metadata | Web U-Boot 刷 `fit`/`rootfs` 卷**不校验**它；缺失时脚本自动跳过该步，产物照常可刷。只有系统启动后用 `sysupgrade` 就地升级才需要 |
+| `gzip` | 重压缩内核 | 优先用系统 `gzip -n -9`（与已上板验证产物逐字节一致）；没有则回退 Python 内置 gzip |
+
+> 脚本**不依赖网络，也不需要 curl**：自动探测 UBID 用的是内置 `urllib`。
+
+### 按发行版一条命令装好
+
+**Arch Linux**（本项目的实际验证环境）
+
+```bash
+sudo pacman -S --needed python dtc uboot-tools gzip
+```
+
+**Debian 12/13（bookworm/trixie）**
+
+```bash
+sudo apt update && sudo apt install -y python3 device-tree-compiler u-boot-tools gzip
+```
+
+**Ubuntu 22.04 / 24.04（jammy/noble）** — 与 Debian 同名同命令
+
+```bash
+sudo apt update && sudo apt install -y python3 device-tree-compiler u-boot-tools gzip
+```
+
+**Fedora 39+ / RHEL 系**
+
+```bash
+sudo dnf install -y python3 dtc uboot-tools gzip
+```
+
+注意两点：
+
+- 包名不同：Debian/Ubuntu 叫 `u-boot-tools` + `device-tree-compiler`，
+  Arch/Fedora 叫 `uboot-tools` + `dtc`。
+- **`fwtool` 四个发行版的仓库里都没有**（它只存在于 OpenWrt 侧）。需要 metadata 时源码构建：
+
+```bash
+git clone https://git.openwrt.org/project/fwtool.git
+cd fwtool && cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build
+# 用 --fwtool ./build/fwtool 指向它，或放进 PATH
+```
+
+### 装完自检
+
+```bash
+python3 --version && dtc --version && mkimage -V && dumpimage -V
+command -v fwtool || echo "无 fwtool：将自动跳过 metadata（不影响刷入）"
+```
+
+### 不想装系统包？用现成的 U-Boot tools 目录
+
+`mkimage`/`dumpimage` 也可以是你在别的 U-Boot 源码树里编出来的
+`tools/mkimage`、`tools/dumpimage`，直接告诉脚本那个目录：
+
+```bash
+python3 qwrt2an758x.py <原版.bin> --ubid 6 --tools /path/to/u-boot/tools
+```
+
+脚本还会自动搜 `./u-boot-tools/`、`./tools/`、`../../work/u-boot-2026.07/tools/`、
+`../../work/`（后两个是本仓库工作目录的便捷路径，独立 clone 时不存在，属正常）。
+真找不到会明确报错列出缺哪个，不会静默失败。
 
 ---
 
@@ -48,7 +136,7 @@ python3 qwrt2an758x.py ../../QWRT-R26.09.30-airoha-an7581-nokia_xg-040g-md-squas
 # 让板子停在 Web U-Boot 恢复页，脚本自动 GET /info 读 rootfs 卷编号
 python3 qwrt2an758x.py <原版.bin>
 
-# pbs05 uboot-an758x 的恢复页 IP 是 192.168.0.1，指定探测地址
+# 若板子刷的是 pbs05/uboot-an758x，它的恢复页 IP 是 192.168.0.1，指定探测地址
 python3 qwrt2an758x.py <原版.bin> --boot-ip 192.168.0.1
 
 # 指定输出目录 / 文件前缀 / 保留中间产物排查
@@ -70,7 +158,7 @@ python3 qwrt2an758x.py <原版.bin> --ubid 6 -o ../../out --keep-build
 |------|------|
 | `bin`（位置参数） | 原版 QWRT `…-squashfs-sysupgrade.bin` |
 | `--ubid N` | **rootfs 卷的 UBI 编号**。不给则自动从 `GET /info` 探测；探测不到就**硬中止**（退出码 3），绝不瞎猜 |
-| `--boot-ip IP` | 探测用地址，可重复；默认依次试 `192.168.1.1`（本项目）`192.168.0.1`（pbs05） |
+| `--boot-ip IP` | 探测用地址，可重复；默认依次试 `192.168.1.1`（ImmortalWrt-Airoha 网页 U-Boot）`192.168.0.1`（pbs05/uboot-an758x） |
 | `-o, --outdir DIR` | 产物目录，默认 `脚本目录/out` |
 | `--prefix NAME` | 输出文件名前缀，默认取输入名去掉 `squashfs-sysupgrade.bin` |
 | `--tools DIR` | U-Boot tools 目录（含 `mkimage`/`dumpimage`） |
@@ -123,3 +211,5 @@ python3 qwrt2an758x.py <原版.bin> --ubid 6 -o ../../out --keep-build
 
 - `qwrt2an758x.py` — 主脚本（CLI）
 - `b2_dts.py`   — 设备树改写逻辑（`work/make_b2_dts.py` 的参数化副本，逐断言保留；也可 `python3 b2_dts.py` 单独跑，接口同旧版：`SRC_DTS`/`DST_DTS`/`UBID`）
+- `requirements.txt` — 环境要求：无 pip 依赖，4 个系统工具 + Arch/Debian/Ubuntu/Fedora 各自安装命令 + `fwtool` 源码构建方法
+- `QWRT-B2-说明.md` — 详细原理，以及 B2 与原版 QWRT 的逐项区别（什么变了、什么刻意没变、为何这么变）
